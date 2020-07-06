@@ -10,16 +10,16 @@ import (
 )
 
 type ServerPool struct {
-	backends []*backend.Backend
-	current  uint64
+	backends       []*backend.Backend
+	fastestSrvPool uint64
 }
 
 func (s *ServerPool) AddBackend(backend *backend.Backend) {
 	s.backends = append(s.backends, backend)
 }
 
-func (s *ServerPool) NextIndex() int {
-	return int(atomic.AddUint64(&s.current, uint64(1)) % uint64(len(s.backends)))
+func (s *ServerPool) GetIndex() int {
+	return int(atomic.LoadUint64(&s.fastestSrvPool))
 }
 
 func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
@@ -31,14 +31,14 @@ func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
 	}
 }
 
-func (s *ServerPool) GetNextPeer() *backend.Backend {
-	next := s.NextIndex()
-	l := len(s.backends) + next
-	for i := next; i < l; i++ {
+func (s *ServerPool) GetFastestPeer() *backend.Backend {
+	fastest := s.GetIndex()
+	l := len(s.backends) + fastest
+	for i := fastest; i < l; i++ {
 		idx := i % len(s.backends)
 		if s.backends[idx].IsAlive() {
-			if i != next {
-				atomic.StoreUint64(&s.current, uint64(idx))
+			if i != fastest {
+				atomic.StoreUint64(&s.fastestSrvPool, uint64(idx))
 			}
 			return s.backends[idx]
 		}
@@ -47,10 +47,23 @@ func (s *ServerPool) GetNextPeer() *backend.Backend {
 }
 
 func (s *ServerPool) HealthCheck() {
-	for _, b := range s.backends {
+	var fastest = int64(^uint64(0) >> 1)
+	var fastestIndex = 0
+
+	for index, b := range s.backends {
+		start := time.Now()
 		alive := isBackendAlive(b.URL)
+		end := time.Now()
+
+		if fastest > end.UnixNano() - start.UnixNano() {
+			fastest = end.UnixNano() - start.UnixNano()
+			fastestIndex = index
+		}
+
 		b.SetAlive(alive)
 	}
+
+	atomic.StoreUint64(&s.fastestSrvPool, uint64(fastestIndex))
 }
 
 func isBackendAlive(u *url.URL) bool {

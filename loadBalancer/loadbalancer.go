@@ -115,7 +115,7 @@ func (lb *LB) LB(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lb.mux.Lock()
-	peer := lb.srvPool.GetNextPeer()
+	peer := lb.srvPool.GetFastestPeer()
 	lb.mux.Unlock()
 	if peer != nil {
 		peer.ReverseProxy.ServeHTTP(w, r)

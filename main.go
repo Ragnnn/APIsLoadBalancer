@@ -3,17 +3,18 @@ package main
 import (
 	"flag"
 	"fmt"
-	"git.epitekin.eu/APIsLoadBalancer/loadBalancer"
 	"log"
 	"net/http"
 	"strings"
+
+	"git.epitekin.eu/APIsLoadBalancer/loadBalancer"
 )
 
 func main() {
 	var serverList string
 	var port int
 	flag.StringVar(&serverList, "backends", "", "Load balanced backends, use commas to separate")
-	flag.IntVar(&port, "port", 3030, "Port to serve")
+	flag.IntVar(&port, "port", 8080, "Port to serve")
 	flag.Parse()
 
 	var lb *loadBalancer.LB
