@@ -25,3 +25,7 @@ func (b *Backend) IsAlive() (alive bool) {
 	b.mux.RUnlock()
 	return
 }
+
+func (b *Backend) IsMe(url string) bool {
+	return b.URL.String() == url
+}

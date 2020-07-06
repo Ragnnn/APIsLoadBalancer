@@ -4,34 +4,43 @@ import (
 	"context"
 	"fmt"
 	"git.epitekin.eu/APIsLoadBalancer/backend"
+	"git.epitekin.eu/APIsLoadBalancer/services"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"git.epitekin.eu/APIsLoadBalancer/serverPool"
 )
 
 const (
 	Attempts int = iota
 	Retry
 
-	localURL = "http://localhost"
+	localURL    = "http://localhost"
+	adminRoute  = "/admin"
+	simpleRoute = "/simple"
 )
 
 type LB struct {
-	srvPool serverPool.ServerPool
-	mux sync.Mutex
+	serverPoolsStock *services.Services
 }
 
 func New(serverList []string) *LB {
-	lb := &LB{}
+	lb := &LB{
+		serverPoolsStock: services.New(),
+	}
+
+	lb.serverPoolsStock.AddService(adminRoute)
+	lb.serverPoolsStock.AddService(simpleRoute)
+
 	for _, server := range serverList {
-		lb.AddInstance(server)
+		if strings.HasSuffix(server, adminRoute) {
+			lb.AddInstance(server[:len(server)-len(adminRoute)], adminRoute)
+		} else if strings.HasSuffix(server, simpleRoute) {
+			lb.AddInstance(server[:len(server)-len(simpleRoute)], simpleRoute)
+		}
 	}
 
 	go lb.healthCheck()
@@ -53,7 +62,13 @@ func (lb *LB) GetRetryFromContext(r *http.Request) int {
 	return 0
 }
 
-func (lb *LB) AddInstance(server string) {
+func (lb *LB) RemoveInstance(serverUrl, route string) {
+	lb.serverPoolsStock.FromServerPoolRemoveBackend(route, serverUrl)
+	log.Printf("Removed server: %s\n", serverUrl)
+
+}
+
+func (lb *LB) AddInstance(server string, route string) {
 	serverUrl, err := url.Parse(server)
 	if err != nil {
 		log.Fatal(err)
@@ -72,9 +87,7 @@ func (lb *LB) AddInstance(server string) {
 			return
 		}
 
-		lb.mux.Lock()
-		lb.srvPool.MarkBackendStatus(serverUrl, false)
-		lb.mux.Unlock()
+		lb.serverPoolsStock.FromServerPoolMarkBackendStatus(route, serverUrl, false)
 
 		attempts := lb.GetAttemptsFromContext(request)
 		log.Printf("%s(%s) Attempting retry %d\n", request.RemoteAddr, request.URL.Path, attempts)
@@ -88,9 +101,7 @@ func (lb *LB) AddInstance(server string) {
 	}
 	bck.SetAlive(true)
 
-	lb.mux.Lock()
-	lb.srvPool.AddBackend(bck)
-	lb.mux.Unlock()
+	lb.serverPoolsStock.FromServerPoolAddBackend(route, bck)
 	log.Printf("Configured server: %s\n", serverUrl)
 }
 
@@ -103,20 +114,22 @@ func (lb *LB) LB(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(r.URL.String(), "/lb/") {
-		args := strings.SplitN(r.URL.String()[1:], "/", 2)
-		if _, err := strconv.Atoi(args[1]); err != nil {
+		args := strings.SplitN(r.URL.String()[1:], "/", 4)
+		if _, err := strconv.Atoi(args[2]); err != nil {
 			http.Error(w, "need a valid port", http.StatusBadRequest)
 			return
 		}
-		lb.AddInstance(fmt.Sprintf("%s:%s", localURL, args[1]))
+		if args[1] == "add" {
+			lb.AddInstance(fmt.Sprintf("%s:%s", localURL, args[2]), "/"+args[3])
+		} else if args[1] == "remove" {
+			lb.RemoveInstance(fmt.Sprintf("%s:%s", localURL, args[2]), "/"+args[3])
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintln(w, "Service added")
 		return
 	}
 
-	lb.mux.Lock()
-	peer := lb.srvPool.GetFastestPeer()
-	lb.mux.Unlock()
+	peer := lb.serverPoolsStock.FromServerPoolGetBestPeer(r.URL.String())
 	if peer != nil {
 		peer.ReverseProxy.ServeHTTP(w, r)
 		return
@@ -129,9 +142,7 @@ func (lb *LB) healthCheck() {
 	for {
 		select {
 		case <-t.C:
-			lb.mux.Lock()
-			lb.srvPool.HealthCheck()
-			lb.mux.Unlock()
+			lb.serverPoolsStock.HealthCheck()
 		}
 	}
 }

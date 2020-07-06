@@ -20,7 +20,6 @@ func main() {
 	var lb *loadBalancer.LB
 	lb = loadBalancer.New(strings.Split(serverList, ","))
 
-	// create http server
 	server := http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: http.HandlerFunc(lb.LB),
