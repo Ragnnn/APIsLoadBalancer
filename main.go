@@ -14,7 +14,7 @@ func main() {
 	var serverList string
 	var port int
 	flag.StringVar(&serverList, "backends", "", "Load balanced backends, use commas to separate")
-	flag.IntVar(&port, "port", 8080, "Port to serve")
+	flag.IntVar(&port, "port", 8080, "Port to serve (default: 8080)")
 	flag.Parse()
 
 	var lb *loadBalancer.LB

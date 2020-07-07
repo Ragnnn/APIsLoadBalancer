@@ -1,17 +1,22 @@
 package serverPool
 
 import (
-	"git.epitekin.eu/APIsLoadBalancer/backend"
+	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
-	"sync/atomic"
 	"time"
+
+	"git.epitekin.eu/APIsLoadBalancer/backend"
+)
+
+const (
+	maxInt64 int64 = 1<<63 - 1
 )
 
 type ServerPool struct {
-	backends    []*backend.Backend
-	bestSrvPool uint64
+	backends []*backend.Backend
 }
 
 func (s *ServerPool) AddBackend(backend *backend.Backend) {
@@ -27,8 +32,25 @@ func (s *ServerPool) RemoveBackend(url string) {
 	}
 }
 
-func (s *ServerPool) GetIndex() int {
-	return int(atomic.LoadUint64(&s.bestSrvPool))
+func (s *ServerPool) getIndex() int {
+	var (
+		fastest      = maxInt64
+		fastestIndex = len(s.backends)
+	)
+
+	for index, bck := range s.backends {
+		tmp := bck.TimeSpentAverage()
+		if tmp < fastest {
+			fastest = tmp
+			fastestIndex = index
+		}
+	}
+
+	if fastestIndex == len(s.backends) {
+		return 0
+	}
+
+	return fastestIndex
 }
 
 func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
@@ -40,39 +62,33 @@ func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
 	}
 }
 
-func (s *ServerPool) GetBestPeer() *backend.Backend {
-	best := s.GetIndex()
+func (s *ServerPool) BestPeerHandle(w http.ResponseWriter, r *http.Request) {
+	if len(s.backends) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		_, _ = fmt.Fprintln(w, "No instance available")
+		return
+	}
+
+	best := s.getIndex()
 	l := len(s.backends) + best
 	for i := best; i < l; i++ {
 		idx := i % len(s.backends)
-		if s.backends[idx].IsAlive() {
-			if i != best {
-				atomic.StoreUint64(&s.bestSrvPool, uint64(idx))
-			}
-			return s.backends[idx]
+		if !s.backends[idx].IsAlive() {
+			continue
 		}
+		start := time.Now()
+		s.backends[idx].ReverseProxy.ServeHTTP(w, r)
+		s.backends[idx].AddTimeSpentAverage(time.Since(start).Nanoseconds())
+		return
 	}
-	return nil
+	http.Error(w, "Service not available", http.StatusServiceUnavailable)
 }
 
 func (s *ServerPool) HealthCheck() {
-	var fastest = int64(^uint64(0) >> 1)
-	var fastestIndex = 0
-
-	for index, b := range s.backends {
-		start := time.Now()
+	for _, b := range s.backends {
 		alive := isBackendAlive(b.URL)
-		end := time.Now()
-
-		if fastest > end.UnixNano()-start.UnixNano() {
-			fastest = end.UnixNano() - start.UnixNano()
-			fastestIndex = index
-		}
-
 		b.SetAlive(alive)
 	}
-
-	atomic.StoreUint64(&s.bestSrvPool, uint64(fastestIndex))
 }
 
 func isBackendAlive(u *url.URL) bool {

@@ -1,11 +1,19 @@
 package services
 
 import (
-	"git.epitekin.eu/APIsLoadBalancer/backend"
-	"git.epitekin.eu/APIsLoadBalancer/serverPool"
+	"fmt"
+	"log"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+
+	"git.epitekin.eu/APIsLoadBalancer/backend"
+	"git.epitekin.eu/APIsLoadBalancer/serverPool"
+)
+
+const (
+	noServicesAvailable = "No services available"
 )
 
 type (
@@ -42,6 +50,11 @@ func (s *Services) getService(route string) *protected {
 
 func (s *Services) FromServerPoolAddBackend(route string, backend *backend.Backend) {
 	service := s.getService(route)
+	if service == nil {
+		log.Println(noServicesAvailable)
+		return
+	}
+
 	service.mux.Lock()
 	defer service.mux.Unlock()
 	service.AddBackend(backend)
@@ -49,30 +62,39 @@ func (s *Services) FromServerPoolAddBackend(route string, backend *backend.Backe
 
 func (s *Services) FromServerPoolRemoveBackend(route, serverURL string) {
 	service := s.getService(route)
+	if service == nil {
+		log.Println(noServicesAvailable)
+		return
+	}
+
 	service.mux.Lock()
 	defer service.mux.Unlock()
 	service.RemoveBackend(serverURL)
 }
 
-func (s *Services) FromServerPoolGetIndex(route string) int {
-	service := s.getService(route)
-	service.mux.Lock()
-	defer service.mux.Unlock()
-	return service.GetIndex()
-}
-
 func (s *Services) FromServerPoolMarkBackendStatus(route string, backendUrl *url.URL, alive bool) {
 	service := s.getService(route)
+	if service == nil {
+		log.Println(noServicesAvailable)
+		return
+	}
+
 	service.mux.Lock()
 	defer service.mux.Unlock()
 	service.MarkBackendStatus(backendUrl, alive)
 }
 
-func (s *Services) FromServerPoolGetBestPeer(route string) *backend.Backend {
+func (s *Services) FromServerPoolBestPeerHandle(route string, w http.ResponseWriter, r *http.Request) {
 	service := s.getService(route)
+	if service == nil {
+		w.WriteHeader(http.StatusNoContent)
+		_, _ = fmt.Fprintln(w, noServicesAvailable)
+		return
+	}
+
 	service.mux.Lock()
 	defer service.mux.Unlock()
-	return service.GetBestPeer()
+	service.BestPeerHandle(w, r)
 }
 
 func (s *Services) HealthCheck() {

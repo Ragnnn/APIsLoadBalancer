@@ -3,8 +3,6 @@ package loadBalancer
 import (
 	"context"
 	"fmt"
-	"git.epitekin.eu/APIsLoadBalancer/backend"
-	"git.epitekin.eu/APIsLoadBalancer/services"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -12,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"git.epitekin.eu/APIsLoadBalancer/backend"
+	"git.epitekin.eu/APIsLoadBalancer/services"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	Retry
 
 	localURL    = "http://localhost"
+	lbRoute  = "/lb/"
 	adminRoute  = "/admin"
 	simpleRoute = "/simple"
 )
@@ -95,11 +97,7 @@ func (lb *LB) AddInstance(server string, route string) {
 		lb.LB(writer, request.WithContext(ctx))
 	}
 
-	bck := &backend.Backend{
-		URL:          serverUrl,
-		ReverseProxy: proxy,
-	}
-	bck.SetAlive(true)
+	bck := backend.New(serverUrl, proxy, true)
 
 	lb.serverPoolsStock.FromServerPoolAddBackend(route, bck)
 	log.Printf("Configured server: %s\n", serverUrl)
@@ -113,7 +111,7 @@ func (lb *LB) LB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.HasPrefix(r.URL.String(), "/lb/") {
+	if strings.HasPrefix(r.URL.String(), lbRoute) {
 		args := strings.SplitN(r.URL.String()[1:], "/", 4)
 		if _, err := strconv.Atoi(args[2]); err != nil {
 			http.Error(w, "need a valid port", http.StatusBadRequest)
@@ -129,12 +127,7 @@ func (lb *LB) LB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peer := lb.serverPoolsStock.FromServerPoolGetBestPeer(r.URL.String())
-	if peer != nil {
-		peer.ReverseProxy.ServeHTTP(w, r)
-		return
-	}
-	http.Error(w, "Service not available", http.StatusServiceUnavailable)
+	lb.serverPoolsStock.FromServerPoolBestPeerHandle(r.URL.String(), w, r)
 }
 
 func (lb *LB) healthCheck() {
