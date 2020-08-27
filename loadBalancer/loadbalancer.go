@@ -19,19 +19,27 @@ const (
 	Attempts int = iota
 	Retry
 
-	localURL    = "http://localhost"
-	lbRoute  = "/lb/"
+	localURL = "http://localhost"
+
+	lbRoute     = "/lb/"
+	tokenRoute  = "/auth/token"
 	adminRoute  = "/admin"
 	simpleRoute = "/simple"
+
+	authAccepted = "202 Accepted"
 )
 
 type LB struct {
 	serverPoolsStock *services.Services
+	portStr          string
+	authPortStr      string
 }
 
-func New(serverList []string) *LB {
+func New(serverList []string, portStr, authPortStr string) *LB {
 	lb := &LB{
 		serverPoolsStock: services.New(),
+		portStr:          portStr,
+		authPortStr:      authPortStr,
 	}
 
 	lb.serverPoolsStock.AddService(adminRoute)
@@ -111,7 +119,41 @@ func (lb *LB) LB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.HasPrefix(r.URL.String(), lbRoute) {
+	var (
+		client = &http.Client{
+			Timeout: time.Second * 5,
+		}
+		authRequest *http.Request
+		resp        *http.Response
+		err         error
+	)
+
+	authRequest, err = http.NewRequest(r.Method, strings.Replace("http://"+r.Host+r.URL.String(), lb.portStr, lb.authPortStr, 1), nil)
+	if err != nil {
+		log.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	authRequest.Header.Set("Authorization", r.Header.Get("Authorization"))
+
+	resp, err = client.Do(authRequest)
+	if err != nil {
+		log.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if resp.Status != authAccepted {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if r.URL.String() == tokenRoute {
+		w.Header().Set("Authorization", resp.Header.Get("Authorization"))
+		w.WriteHeader(resp.StatusCode)
+		return
+	}
+
+	route := r.URL.String()
+	if strings.HasPrefix(r.URL.Path, lbRoute) {
 		args := strings.SplitN(r.URL.String()[1:], "/", 4)
 		if _, err := strconv.Atoi(args[2]); err != nil {
 			http.Error(w, "need a valid port", http.StatusBadRequest)
@@ -125,9 +167,13 @@ func (lb *LB) LB(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintln(w, "Service added")
 		return
+	} else if strings.HasPrefix(r.URL.Path, simpleRoute) {
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, simpleRoute)
+	} else if strings.HasPrefix(r.URL.Path, adminRoute) {
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, adminRoute)
 	}
 
-	lb.serverPoolsStock.FromServerPoolBestPeerHandle(r.URL.String(), w, r)
+	lb.serverPoolsStock.FromServerPoolBestPeerHandle(route, w, r)
 }
 
 func (lb *LB) healthCheck() {
